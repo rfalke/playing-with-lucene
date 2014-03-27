@@ -7,47 +7,53 @@ import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.*;
 import org.apache.lucene.search.*;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.RAMDirectory;
 import org.apache.lucene.store.SimpleFSDirectory;
 import org.apache.lucene.util.Version;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.Locale;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 @SuppressWarnings("UnusedDeclaration")
 public class Main {
+    private static final Function<IndexWriterConfig, IndexWriterConfig> NO_COMPOUND_FILES = (c) -> c.setUseCompoundFile(false);
+    private static final Function<IndexWriterConfig, IndexWriterConfig> USE_COMPOUND_FILES = (c) -> c.setUseCompoundFile(true);
+
     public static void main(String[] args) throws Exception {
         checkAsserts();
 
-//        compareIndexSizes();
-//        compareSegmentSizes();
-        commitSpeed();
+//        compareIndexSizes("file system, single file", () -> getCleanDirectory("test-directory"), USE_COMPOUND_FILES);
+//        compareIndexSizes("memory, single file", Main::getMemoryDirectory, USE_COMPOUND_FILES);
+//        compareIndexSizes("file system, multiple files", () -> getCleanDirectory("test-directory"), NO_COMPOUND_FILES);
+//        compareIndexSizes("memory, multiple files", Main::getMemoryDirectory, NO_COMPOUND_FILES);
+//        compareSegmentSizes(() -> getCleanDirectory("test-directory"));
+//        compareSegmentSizes(Main::getMemoryDirectory);
+//        commitSpeedUsingFileSystem();
+//        commitSpeedUsingMemory();
 //        commitSpeedWithoutAutomerge();
-//        mergeOfFieldNames();
 //        differentFieldTypes();
 //        useIndexSearcher();
 //        useIndexSearcherWithNotStoredField();
 //        useCollector();
 //        documentsBecomeVisibleAfterACommit();
-//        withNearRealTimeSearchDocumentsBecomeVisibleSooner();
+        withNearRealTimeSearchDocumentsBecomeVisibleSooner();
         forceCompoundFileFormat();
         forceSeparateFiles();
     }
 
     private static void forceCompoundFileFormat() throws IOException {
         Directory directory = getCleanDirectory("test-directory-compound");
-        IndexWriterConfig conf = getBaseIndexWriterConfig();
-        conf.setUseCompoundFile(true);
-        IndexWriter indexWriter = new IndexWriter(directory, conf);
+        IndexWriter indexWriter = getIndexWriter(directory, USE_COMPOUND_FILES);
         indexWriter.addDocument(new Document());
         indexWriter.close();
     }
 
     private static void forceSeparateFiles() throws IOException {
         Directory directory = getCleanDirectory("test-directory-separate");
-        IndexWriterConfig conf = getBaseIndexWriterConfig();
-        conf.setUseCompoundFile(false);
-        IndexWriter indexWriter = new IndexWriter(directory, conf);
+        IndexWriter indexWriter = getIndexWriter(directory, NO_COMPOUND_FILES);
         indexWriter.addDocument(new Document());
         indexWriter.close();
     }
@@ -106,9 +112,7 @@ public class Main {
 
     private static void useCollector() throws IOException {
         Directory directory = getCleanDirectory("test-directory");
-        IndexWriterConfig conf = getBaseIndexWriterConfig();
-        conf.setUseCompoundFile(false);
-        IndexWriter indexWriter = new IndexWriter(directory, conf);
+        IndexWriter indexWriter = getIndexWriter(directory);
 
         FieldType fieldType = TextField.TYPE_NOT_STORED;
         addDocument(indexWriter, "foo bar", fieldType);
@@ -129,9 +133,7 @@ public class Main {
 
     private static void useIndexSearcherWithNotStoredField() throws IOException {
         Directory directory = getCleanDirectory("test-directory-not-stored");
-        IndexWriterConfig conf = getBaseIndexWriterConfig();
-        conf.setUseCompoundFile(false);
-        IndexWriter indexWriter = new IndexWriter(directory, conf);
+        IndexWriter indexWriter = getIndexWriter(directory);
 
         FieldType fieldType = TextField.TYPE_NOT_STORED;
         addDocument(indexWriter, "foo bar", fieldType);
@@ -153,9 +155,7 @@ public class Main {
 
     private static void useIndexSearcher() throws IOException {
         Directory directory = getCleanDirectory("test-directory-stored");
-        IndexWriterConfig conf = getBaseIndexWriterConfig();
-        conf.setUseCompoundFile(false);
-        IndexWriter indexWriter = new IndexWriter(directory, conf);
+        IndexWriter indexWriter = getIndexWriter(directory);
 
         FieldType fieldType = TextField.TYPE_STORED;
         addDocument(indexWriter, "foo bar", fieldType);
@@ -184,9 +184,7 @@ public class Main {
     private static void differentFieldTypes() throws IOException {
         System.out.println("Test what can be read back for various field types");
         Directory directory = getCleanDirectory("test-directory");
-        IndexWriterConfig conf = getBaseIndexWriterConfig();
-        conf.setUseCompoundFile(false);
-        IndexWriter indexWriter = new IndexWriter(directory, conf);
+        IndexWriter indexWriter = getIndexWriter(directory, NO_COMPOUND_FILES);
 
         for (int i = 0; i < 10; i++) {
             Document document = new Document();
@@ -225,24 +223,6 @@ public class Main {
 
     }
 
-//    private static void mergeOfFieldNames() throws IOException {
-//        int toWrite = 2_000;
-//        System.out.println("Test of field names are merges");
-//        Directory directory = getCleanDirectory("test-directory");
-//        IndexWriter indexWriter = getIndexWriter(directory);
-//        long start = System.currentTimeMillis();
-//        for (int i = 0; i < toWrite; i++) {
-//            Document document = new Document();
-//            document.indexableFields()
-//            indexWriter.addDocument(document);
-//        }
-//        indexWriter.close();
-//        SizeAndTime sizeAndTime = getSizeAndTime(directory, start);
-//        double millisPerCommit = (sizeAndTime.millis) / (double) (commits);
-//        double commitsPerSecond = (double) (commits) / ((sizeAndTime.millis / 1000.0));
-//        System.out.println("  got " + sizeAndTime + " and " + commits + " commits = " + millisPerCommit + " ms/commit = " + commitsPerSecond + " commits/sec");
-//    }
-
     private static void commitSpeedWithoutAutomerge() throws IOException {
         int toWrite = 2_000;
         System.out.println("Commit after each empty document");
@@ -264,10 +244,24 @@ public class Main {
         System.out.println("  got " + sizeAndTime + " and " + commits + " commits = " + millisPerCommit + " ms/commit = " + commitsPerSecond + " commits/sec");
     }
 
-    private static void commitSpeed() throws IOException {
-        System.out.println("Commit after each empty document");
+    private static void commitSpeedUsingFileSystem() throws IOException {
+        System.out.println("Commit after each empty document (file system)");
         Directory directory = getCleanDirectory("test-directory");
-        IndexWriter indexWriter = getIndexWriter(directory);
+        measureCommitSpeed(directory, null);
+    }
+
+    private static void commitSpeedUsingMemory() throws IOException {
+        System.out.println("Commit after each empty document (memory)");
+        Directory directory = getMemoryDirectory();
+        measureCommitSpeed(directory, null);
+    }
+
+    private static Directory getMemoryDirectory() {
+        return new RAMDirectory();
+    }
+
+    private static void measureCommitSpeed(Directory directory, Function<IndexWriterConfig, IndexWriterConfig> adjustConfig) throws IOException {
+        IndexWriter indexWriter = getIndexWriter(directory, adjustConfig);
         long start = System.currentTimeMillis();
         int commits = 0;
         for (int i = 0; ; i++) {
@@ -286,15 +280,14 @@ public class Main {
         System.out.println("  got " + sizeAndTime + " and " + commits + " commits = " + millisPerCommit + " ms/commit = " + commitsPerSecond + " commits/sec");
     }
 
-    private static void compareSegmentSizes() throws IOException {
+    private static void compareSegmentSizes(Supplier<Directory> directorySupplier) throws IOException {
         int toWrite = 10_000;
         System.out.println("Write " + toWrite + " empty documents using various commit chunks");
-        SizeAndTime singleEmptyDocument = writeEmptyDocuments(toWrite);
+        SizeAndTime singleEmptyDocument = writeEmptyDocuments(directorySupplier, toWrite, null);
         System.out.println("  only one commit: " + singleEmptyDocument);
         for (int commitEvery = toWrite; commitEvery >= 1; commitEvery /= 10) {
             Directory directory = getCleanDirectory("test-directory");
-            IndexWriterConfig conf = getBaseIndexWriterConfig();
-            IndexWriter indexWriter = new IndexWriter(directory, conf);
+            IndexWriter indexWriter = getIndexWriter(directory);
             long start = System.currentTimeMillis();
             int commits = 0;
             for (int i = 0; i < toWrite; i++) {
@@ -313,13 +306,13 @@ public class Main {
         }
     }
 
-    private static void compareIndexSizes() throws IOException {
-        System.out.println("Examine index size and write time for various empty documents");
-        System.out.println("  index with no documents: " + noDocumentsAdded());
-        SizeAndTime singleEmptyDocument = singleEmptyDocument();
+    private static void compareIndexSizes(String descr, Supplier<Directory> directorySupplier, Function<IndexWriterConfig, IndexWriterConfig> adjustConfig) throws IOException {
+        System.out.println("Examine index size and write time for various empty documents (" + descr + ")");
+        System.out.println("  index with no documents: " + noDocumentsAdded(directorySupplier, adjustConfig));
+        SizeAndTime singleEmptyDocument = singleEmptyDocument(directorySupplier, adjustConfig);
         System.out.println("  index with 1 empty document: " + singleEmptyDocument);
-        for (int n = 10; n < 1000_000_000; n *= 10) {
-            SizeAndTime sizeAndTime = writeEmptyDocuments(n);
+        for (int n = 10; n < 1_000_000_000; n *= 10) {
+            SizeAndTime sizeAndTime = writeEmptyDocuments(directorySupplier, n, adjustConfig);
             double bytesPerDocument = (sizeAndTime.bytes - singleEmptyDocument.bytes) / (n - 1.0);
             double millisPerDocument = (sizeAndTime.millis - singleEmptyDocument.millis) / (n - 1.0);
             double documentPerMs = (n - 1.0) / (sizeAndTime.millis - singleEmptyDocument.millis);
@@ -327,13 +320,13 @@ public class Main {
         }
     }
 
-    private static SizeAndTime singleEmptyDocument() throws IOException {
-        return writeEmptyDocuments(1);
+    private static SizeAndTime singleEmptyDocument(Supplier<Directory> directorySupplier, Function<IndexWriterConfig, IndexWriterConfig> adjustConfig) throws IOException {
+        return writeEmptyDocuments(directorySupplier, 1, adjustConfig);
     }
 
-    private static SizeAndTime writeEmptyDocuments(int n) throws IOException {
-        Directory directory = getCleanDirectory("test-directory");
-        IndexWriter indexWriter = getIndexWriter(directory);
+    private static SizeAndTime writeEmptyDocuments(Supplier<Directory> supplier, int n, Function<IndexWriterConfig, IndexWriterConfig> adjustConfig) throws IOException {
+        Directory directory = supplier.get();
+        IndexWriter indexWriter = getIndexWriter(directory, adjustConfig);
         long start = System.currentTimeMillis();
         for (int i = 0; i < n; i++) {
             Document document = new Document();
@@ -343,8 +336,8 @@ public class Main {
         return getSizeAndTime(directory, start);
     }
 
-    private static SizeAndTime noDocumentsAdded() throws IOException {
-        return writeEmptyDocuments(0);
+    private static SizeAndTime noDocumentsAdded(Supplier<Directory> directorySupplier, Function<IndexWriterConfig, IndexWriterConfig> adjustConfig) throws IOException {
+        return writeEmptyDocuments(directorySupplier, 0, adjustConfig);
     }
 
     private static SizeAndTime getSizeAndTime(Directory directory, long start) throws IOException {
@@ -359,10 +352,14 @@ public class Main {
         return result;
     }
 
-    private static Directory getCleanDirectory(String pathname) throws IOException {
+    private static Directory getCleanDirectory(String pathname) {
         File path = new File(pathname);
         removeDirectory(path);
-        return new SimpleFSDirectory(path);
+        try {
+            return new SimpleFSDirectory(path);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static Directory getDirectory(String pathname) throws IOException {
@@ -386,7 +383,14 @@ public class Main {
     }
 
     private static IndexWriter getIndexWriter(Directory directory) throws IOException {
+        return getIndexWriter(directory, Function.<IndexWriterConfig>identity());
+    }
+
+    private static IndexWriter getIndexWriter(Directory directory, Function<IndexWriterConfig, IndexWriterConfig> adjustConfig) throws IOException {
         IndexWriterConfig conf = getBaseIndexWriterConfig();
+        if (adjustConfig != null) {
+            conf = adjustConfig.apply(conf);
+        }
         return new IndexWriter(directory, conf);
     }
 
@@ -438,7 +442,6 @@ public class Main {
 
         @Override
         public void setNextReader(AtomicReaderContext context) throws IOException {
-//            throw new RuntimeException();
         }
 
         @Override
