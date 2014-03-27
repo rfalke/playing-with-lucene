@@ -18,9 +18,10 @@ import java.util.Locale;
 public class Main {
     public static void main(String[] args) throws Exception {
         checkAsserts();
+
 //        compareIndexSizes();
 //        compareSegmentSizes();
-//        commitSpeed();
+        commitSpeed();
 //        commitSpeedWithoutAutomerge();
 //        mergeOfFieldNames();
 //        differentFieldTypes();
@@ -264,17 +265,19 @@ public class Main {
     }
 
     private static void commitSpeed() throws IOException {
-        int toWrite = 2_000;
         System.out.println("Commit after each empty document");
         Directory directory = getCleanDirectory("test-directory");
         IndexWriter indexWriter = getIndexWriter(directory);
         long start = System.currentTimeMillis();
         int commits = 0;
-        for (int i = 0; i < toWrite; i++) {
+        for (int i = 0; ; i++) {
             Document document = new Document();
             indexWriter.addDocument(document);
             indexWriter.commit();
             commits++;
+            if (System.currentTimeMillis() - start > 30_000) {
+                break;
+            }
         }
         indexWriter.close();
         SizeAndTime sizeAndTime = getSizeAndTime(directory, start);
