@@ -14,6 +14,7 @@ import org.apache.lucene.util.Version;
 import java.io.File;
 import java.io.IOException;
 import java.util.Locale;
+import java.util.Random;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -39,9 +40,70 @@ public class Main {
 //        useIndexSearcherWithNotStoredField();
 //        useCollector();
 //        documentsBecomeVisibleAfterACommit();
-        withNearRealTimeSearchDocumentsBecomeVisibleSooner();
-        forceCompoundFileFormat();
-        forceSeparateFiles();
+//        withNearRealTimeSearchDocumentsBecomeVisibleSooner();
+//        forceCompoundFileFormat();
+//        forceSeparateFiles();
+        // gives Exception: speedOfAnalyzingVsJustStoring(nothing());
+        speedOfAnalyzingVsJustStoring(indexOnly());
+        speedOfAnalyzingVsJustStoring(storeOnly());
+        speedOfAnalyzingVsJustStoring(storeAndIndex());
+    }
+
+    private static void speedOfAnalyzingVsJustStoring(FieldType fieldType) throws IOException {
+        int toWrite = 1_000_000;
+        Directory directory = getMemoryDirectory();
+        IndexWriter indexWriter = getIndexWriter(directory);
+        Random random = new Random(42);
+        long start = System.currentTimeMillis();
+        for (int i = 0; i < toWrite; i++) {
+            Document document = new Document();
+            document.add(new Field("fieldName", randomValue(random), fieldType));
+            indexWriter.addDocument(document);
+        }
+        indexWriter.close();
+        SizeAndTime sizeAndTime = getSizeAndTime(directory, start);
+        System.out.println("Writing " + toWrite + " documents using " + fieldType + " results in " + sizeAndTime);
+    }
+
+    private static FieldType storeAndIndex() {
+        FieldType storeAndIndex = new FieldType();
+        storeAndIndex.setStored(true);
+        storeAndIndex.setIndexed(true);
+        return storeAndIndex;
+    }
+
+    private static FieldType storeOnly() {
+        FieldType storeAndIndex = new FieldType();
+        storeAndIndex.setStored(true);
+        storeAndIndex.setIndexed(false);
+        return storeAndIndex;
+    }
+
+    private static FieldType indexOnly() {
+        FieldType storeAndIndex = new FieldType();
+        storeAndIndex.setStored(false);
+        storeAndIndex.setIndexed(true);
+        return storeAndIndex;
+    }
+
+    private static FieldType nothing() {
+        FieldType storeAndIndex = new FieldType();
+        storeAndIndex.setStored(false);
+        storeAndIndex.setIndexed(false);
+        return storeAndIndex;
+    }
+
+    private static String randomValue(Random random) {
+        String base = "The Second South Indochina War was over, America had experienced its most profound defeat ever in its history, and Vietnam became synonymous with \"quagmire\". Its impact on American culture was immeasurable, as it taught an entire generation of Americans to fear and mistrust their government, it taught American leaders to fear any amount of US military casualties, and brought the phrase \"clear exit strategy\" directly into the American political lexicon. Not until $g(Ronald Reagan) used the American military to \"liberate\" the small island nation of $g(Grenada) would American military intervention be considered a possible tool of diplomacy by American presidents, and even then only with great sensitivity to domestic concern, as $g(Bill Clinton) would find out during his peacekeeping missions to $g(Somalia) and $g(Kosovo). In quantifiable terms, too, Vietnam's effects clearly fell short of Johnson's goal of a war in \"cold blood\". Final tally: 3 million Americans served in the war, 150,000 seriously wounded, 58,000 dead, and over 1,000 MIA, not to mention nearly a million NVA/Viet Cong troop casualties, 250,000 South Vietnamese casualties, and hundreds of thousands--if not millions, as some historians advocated--of civilian casualties.\n";
+        StringBuilder sb = new StringBuilder();
+        int parts = random.nextInt(10) + 4;
+        int maxLength = base.length() / 20;
+        for (int i = 0; i < parts; i++) {
+            int start = random.nextInt(base.length() - maxLength);
+            int length = random.nextInt(maxLength);
+            sb.append(base.substring(start, start + length));
+        }
+        return sb.toString();
     }
 
     private static void forceCompoundFileFormat() throws IOException {
