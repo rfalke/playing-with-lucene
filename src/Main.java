@@ -1,4 +1,5 @@
 import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.core.KeywordAnalyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
@@ -44,9 +45,30 @@ public class Main {
 //        forceCompoundFileFormat();
 //        forceSeparateFiles();
         // gives Exception: speedOfAnalyzingVsJustStoring(nothing());
-        speedOfAnalyzingVsJustStoring(indexOnly());
-        speedOfAnalyzingVsJustStoring(storeOnly());
-        speedOfAnalyzingVsJustStoring(storeAndIndex());
+//        speedOfAnalyzingVsJustStoring(indexOnly());
+//        speedOfAnalyzingVsJustStoring(storeOnly());
+//        speedOfAnalyzingVsJustStoring(storeAndIndex());
+        speedOfAnalyzer(new StandardAnalyzer(Version.LUCENE_50), Main::wordsFromString);
+        speedOfAnalyzer(new KeywordAnalyzer(), Main::wordsFromString);
+        speedOfAnalyzer(new StandardAnalyzer(Version.LUCENE_50), Main::randomWords);
+        speedOfAnalyzer(new KeywordAnalyzer(), Main::randomWords);
+    }
+
+    private static void speedOfAnalyzer(Analyzer analyzer, Function<Random, String> valueGenerator) throws IOException {
+        int toWrite = 100_000;
+        Directory directory = getMemoryDirectory();
+        IndexWriter indexWriter = getIndexWriter(directory, (c) -> new IndexWriterConfig(Version.LUCENE_50, analyzer));
+        Random random = new Random(42);
+        FieldType fieldType = indexOnly();
+        long start = System.currentTimeMillis();
+        for (int i = 0; i < toWrite; i++) {
+            Document document = new Document();
+            document.add(new Field("fieldName", valueGenerator.apply(random), fieldType));
+            indexWriter.addDocument(document);
+        }
+        indexWriter.close();
+        SizeAndTime sizeAndTime = getSizeAndTime(directory, start);
+        System.out.println("Writing " + toWrite + " documents using " + fieldType + " and " + analyzer + " results in " + sizeAndTime.relativeToNumberOfDocuments(toWrite));
     }
 
     private static void speedOfAnalyzingVsJustStoring(FieldType fieldType) throws IOException {
@@ -57,7 +79,7 @@ public class Main {
         long start = System.currentTimeMillis();
         for (int i = 0; i < toWrite; i++) {
             Document document = new Document();
-            document.add(new Field("fieldName", randomValue(random), fieldType));
+            document.add(new Field("fieldName", wordsFromString(random), fieldType));
             indexWriter.addDocument(document);
         }
         indexWriter.close();
@@ -93,7 +115,7 @@ public class Main {
         return storeAndIndex;
     }
 
-    private static String randomValue(Random random) {
+    private static String wordsFromString(Random random) {
         String base = "The Second South Indochina War was over, America had experienced its most profound defeat ever in its history, and Vietnam became synonymous with \"quagmire\". Its impact on American culture was immeasurable, as it taught an entire generation of Americans to fear and mistrust their government, it taught American leaders to fear any amount of US military casualties, and brought the phrase \"clear exit strategy\" directly into the American political lexicon. Not until $g(Ronald Reagan) used the American military to \"liberate\" the small island nation of $g(Grenada) would American military intervention be considered a possible tool of diplomacy by American presidents, and even then only with great sensitivity to domestic concern, as $g(Bill Clinton) would find out during his peacekeeping missions to $g(Somalia) and $g(Kosovo). In quantifiable terms, too, Vietnam's effects clearly fell short of Johnson's goal of a war in \"cold blood\". Final tally: 3 million Americans served in the war, 150,000 seriously wounded, 58,000 dead, and over 1,000 MIA, not to mention nearly a million NVA/Viet Cong troop casualties, 250,000 South Vietnamese casualties, and hundreds of thousands--if not millions, as some historians advocated--of civilian casualties.\n";
         StringBuilder sb = new StringBuilder();
         int parts = random.nextInt(10) + 4;
@@ -102,6 +124,20 @@ public class Main {
             int start = random.nextInt(base.length() - maxLength);
             int length = random.nextInt(maxLength);
             sb.append(base.substring(start, start + length));
+        }
+        return sb.toString();
+    }
+
+    private static String randomWords(Random random) {
+        char[] alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789,.-;:_#'+*".toCharArray();
+        StringBuilder sb = new StringBuilder();
+        int words = random.nextInt(10) + 4;
+        for (int i = 0; i < words; i++) {
+            int length = random.nextInt(5) + 4;
+            for (int j = 0; j < length; j++) {
+                sb.append(alphabet[random.nextInt(alphabet.length)]);
+            }
+            sb.append(' ');
         }
         return sb.toString();
     }
@@ -485,6 +521,12 @@ public class Main {
             return bytes +
                     " bytes in " + (millis / 1000.0) +
                     " sec";
+        }
+
+        public String relativeToNumberOfDocuments(int numDocuments) {
+            float bytesPerDocument = bytes / (float) numDocuments;
+            float msPerDocument = millis / (float) numDocuments;
+            return bytesPerDocument + " bytes/document and " + msPerDocument * 1000 + " ms/1000 documents";
         }
     }
 
