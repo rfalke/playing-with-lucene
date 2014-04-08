@@ -10,12 +10,12 @@ import org.apache.lucene.search.*;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.RAMDirectory;
 import org.apache.lucene.store.SimpleFSDirectory;
+import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.Version;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Locale;
-import java.util.Random;
+import java.util.*;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -48,10 +48,98 @@ public class Main {
 //        speedOfAnalyzingVsJustStoring(indexOnly());
 //        speedOfAnalyzingVsJustStoring(storeOnly());
 //        speedOfAnalyzingVsJustStoring(storeAndIndex());
-        speedOfAnalyzer(new StandardAnalyzer(Version.LUCENE_50), Main::wordsFromString);
-        speedOfAnalyzer(new KeywordAnalyzer(), Main::wordsFromString);
-        speedOfAnalyzer(new StandardAnalyzer(Version.LUCENE_50), Main::randomWords);
-        speedOfAnalyzer(new KeywordAnalyzer(), Main::randomWords);
+//        speedOfAnalyzer(new StandardAnalyzer(Version.LUCENE_50), Main::wordsFromString);
+//        speedOfAnalyzer(new KeywordAnalyzer(), Main::wordsFromString);
+//        speedOfAnalyzer(new StandardAnalyzer(Version.LUCENE_50), Main::randomWords);
+//        speedOfAnalyzer(new KeywordAnalyzer(), Main::randomWords);
+        speedOfAnalyzerDifferentWays();
+    }
+
+    private static void speedOfAnalyzerDifferentWays() throws IOException {
+        int possibleNumberOfDocuments[] = new int[]{10_000};
+        for (int numberOfDocuments : possibleNumberOfDocuments) {
+            int possibleNumberOfDistinctWords[] = new int[]{10, 1000};
+            for (int numberOfDistinctWords : possibleNumberOfDistinctWords) {
+                // must be below org.apache.lucene.analysis.standard.StandardAnalyzer.DEFAULT_MAX_TOKEN_LENGTH
+                int possibleWordSizes[] = new int[]{15, 150};
+                for (int wordSize : possibleWordSizes) {
+                    Random random = new Random(42);
+                    List<String> words = createListOfWords(wordSize, numberOfDistinctWords, random);
+                    int possibleNumberOfWordsPerDocument[] = new int[]{15, 150};
+                    for (int numberOfWordsPerDocument : possibleNumberOfWordsPerDocument) {
+                        Analyzer possibleAnalysers[] = new Analyzer[]{
+                                new StandardAnalyzer(Version.LUCENE_50),
+                                new KeywordAnalyzer()
+                        };
+                        for (Analyzer analyser : possibleAnalysers) {
+                            if (wordSize * numberOfWordsPerDocument < 32000) {
+                                Config config = new Config(numberOfDistinctWords, wordSize, numberOfDocuments, numberOfWordsPerDocument, analyser);
+
+                                measure(config, words, random);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static void measure(Config config, List<String> words, Random random) throws IOException {
+        System.gc();
+        Directory directory = getMemoryDirectory();
+        IndexWriter indexWriter = getIndexWriter(directory, (c) -> new IndexWriterConfig(Version.LUCENE_50, config.analyser));
+        FieldType fieldType = indexOnly();
+        long start = System.currentTimeMillis();
+        for (int i = 0; i < config.numberOfDocuments; i++) {
+            Document document = new Document();
+            String value = concatRandomWords(words, random, config.numberOfWordsPerDocument);
+            document.add(new Field("fieldName", value, fieldType));
+            indexWriter.addDocument(document);
+        }
+        indexWriter.close();
+        SizeAndTime sizeAndTime = getSizeAndTime(directory, start);
+        int terms = (int) getNumberOfTerms(directory, "fieldName");
+        System.out.println("Using " + config + " results in " + terms + " terms and " + sizeAndTime.relativeToNumberOfDocuments(config.numberOfDocuments));
+    }
+
+    private static long getNumberOfTerms(Directory directory, String fieldName) throws IOException {
+        IndexReader indexReader = DirectoryReader.open(directory);
+        Fields fields = MultiFields.getFields(indexReader);
+        Terms terms = fields.terms(fieldName);
+        assert terms != null;
+        TermsEnum iterator = terms.iterator(null);
+        long result = 0;
+        BytesRef byteRef;
+        while ((byteRef = iterator.next()) != null) {
+            String term = new String(byteRef.bytes, byteRef.offset, byteRef.length);
+            result++;
+        }
+        return result;
+    }
+
+    private static String concatRandomWords(List<String> words, Random random, int numWords) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < numWords; i++) {
+            sb.append(words.get(random.nextInt(words.size()))).append(' ');
+        }
+        return sb.toString();
+    }
+
+    private static List<String> createListOfWords(int wordSize, int numberOfDistinctWords, Random random) {
+        Set<String> result = new HashSet<>();
+        while (result.size() < numberOfDistinctWords) {
+            result.add(generateWord(wordSize, random));
+        }
+        return new ArrayList<>(result);
+    }
+
+    private static String generateWord(int wordSize, Random random) {
+        char[] alphabet = "abcdefghijklmnopqrstuvwxyz".toCharArray();
+        StringBuilder sb = new StringBuilder();
+        for (int j = 0; j < wordSize; j++) {
+            sb.append(alphabet[random.nextInt(alphabet.length)]);
+        }
+        return sb.toString();
     }
 
     private static void speedOfAnalyzer(Analyzer analyzer, Function<Random, String> valueGenerator) throws IOException {
@@ -526,7 +614,7 @@ public class Main {
         public String relativeToNumberOfDocuments(int numDocuments) {
             float bytesPerDocument = bytes / (float) numDocuments;
             float msPerDocument = millis / (float) numDocuments;
-            return bytesPerDocument + " bytes/document and " + msPerDocument * 1000 + " ms/1000 documents";
+            return String.format(Locale.ENGLISH, "%d bytes/document and %.1f ms/1000 documents", (int) bytesPerDocument, msPerDocument * 1000);
         }
     }
 
@@ -551,6 +639,34 @@ public class Main {
         @Override
         public boolean acceptsDocsOutOfOrder() {
             return true;
+        }
+    }
+
+    private static class Config {
+        private final int numberOfDistinctWords;
+        private final int wordSize;
+        private final int numberOfDocuments;
+        private final int numberOfWordsPerDocument;
+        private final Analyzer analyser;
+
+        public Config(int numberOfDistinctWords, int wordSize, int numberOfDocuments, int numberOfWordsPerDocument, Analyzer analyser) {
+            this.numberOfDistinctWords = numberOfDistinctWords;
+            this.wordSize = wordSize;
+            this.numberOfDocuments = numberOfDocuments;
+            this.numberOfWordsPerDocument = numberOfWordsPerDocument;
+            this.analyser = analyser;
+        }
+
+        @Override
+        public String toString() {
+            return "{" +
+                    "documents=" + numberOfDocuments +
+                    ", distinctWords=" + numberOfDistinctWords +
+                    ", wordSize=" + wordSize +
+                    ", wordsPerDocument=" + numberOfWordsPerDocument +
+                    ", fieldSize=" + (numberOfWordsPerDocument * (wordSize + 1)) +
+                    ", analyser=" + analyser.getClass().getSimpleName() +
+                    '}';
         }
     }
 }
