@@ -67,15 +67,37 @@ public class Main {
                     List<String> words = createListOfWords(wordSize, numberOfDistinctWords, random);
                     int possibleNumberOfWordsPerDocument[] = new int[]{15, 150};
                     for (int numberOfWordsPerDocument : possibleNumberOfWordsPerDocument) {
-                        Analyzer possibleAnalysers[] = new Analyzer[]{
-                                new StandardAnalyzer(Version.LUCENE_50),
-                                new KeywordAnalyzer()
-                        };
-                        for (Analyzer analyser : possibleAnalysers) {
-                            if (wordSize * numberOfWordsPerDocument < 32000) {
+                        if (wordSize * numberOfWordsPerDocument < 32000) {
+                            Analyzer possibleAnalysers[] = new Analyzer[]{
+                                    new StandardAnalyzer(Version.LUCENE_50),
+                                    new KeywordAnalyzer()
+                            };
+                            List<Double> allTimes = new ArrayList<>();
+                            for (Analyzer analyser : possibleAnalysers) {
                                 Config config = new Config(numberOfDistinctWords, wordSize, numberOfDocuments, numberOfWordsPerDocument, analyser);
 
-                                measure(config, words, random);
+                                long start = System.currentTimeMillis();
+                                List<Double> times = new ArrayList<>();
+                                for (int i = 0; ; i++) {
+                                    long secs = (System.currentTimeMillis() - start) / 1000;
+                                    if (i > 5 && secs > 30) {
+                                        break;
+                                    }
+                                    times.add(measure(config, words, random));
+                                }
+                                double min = getMin(times);
+                                allTimes.add(min);
+                                System.out.printf(Locale.ENGLISH, "%-110s results in %6.1f us/document", config, min * 1_000_000.0);
+                                if (allTimes.size() == 2) {
+                                    double std = allTimes.get(0);
+                                    double key = allTimes.get(1);
+                                    if (key > 1.5 * std) {
+                                        System.out.print(" ** standard is much faster");
+                                    } else if (std > 1.5 * key) {
+                                        System.out.print(" == keyword is much faster");
+                                    }
+                                }
+                                System.out.println();
                             }
                         }
                     }
@@ -84,12 +106,18 @@ public class Main {
         }
     }
 
-    private static void measure(Config config, List<String> words, Random random) throws IOException {
+    private static double getMin(List<Double> values) {
+        Double[] array = values.toArray(new Double[values.size()]);
+        Arrays.sort(array);
+        return array[0];
+    }
+
+    private static double measure(Config config, List<String> words, Random random) throws IOException {
         System.gc();
         Directory directory = getMemoryDirectory();
         IndexWriter indexWriter = getIndexWriter(directory, (c) -> new IndexWriterConfig(Version.LUCENE_50, config.analyser));
         FieldType fieldType = indexOnly();
-        long start = System.currentTimeMillis();
+        long start = System.nanoTime();
         for (int i = 0; i < config.numberOfDocuments; i++) {
             Document document = new Document();
             String value = concatRandomWords(words, random, config.numberOfWordsPerDocument);
@@ -99,7 +127,8 @@ public class Main {
         indexWriter.close();
         SizeAndTime sizeAndTime = getSizeAndTime(directory, start);
         int terms = (int) getNumberOfTerms(directory, "fieldName");
-        System.out.println("Using " + config + " results in " + terms + " terms and " + sizeAndTime.relativeToNumberOfDocuments(config.numberOfDocuments));
+//        System.out.println("Using " + config + " results in " + terms + " terms and " + sizeAndTime.relativeToNumberOfDocuments(config.numberOfDocuments));
+        return (sizeAndTime.secs) / (float) config.numberOfDocuments;
     }
 
     private static long getNumberOfTerms(Directory directory, String fieldName) throws IOException {
@@ -148,7 +177,7 @@ public class Main {
         IndexWriter indexWriter = getIndexWriter(directory, (c) -> new IndexWriterConfig(Version.LUCENE_50, analyzer));
         Random random = new Random(42);
         FieldType fieldType = indexOnly();
-        long start = System.currentTimeMillis();
+        long start = System.nanoTime();
         for (int i = 0; i < toWrite; i++) {
             Document document = new Document();
             document.add(new Field("fieldName", valueGenerator.apply(random), fieldType));
@@ -164,7 +193,7 @@ public class Main {
         Directory directory = getMemoryDirectory();
         IndexWriter indexWriter = getIndexWriter(directory);
         Random random = new Random(42);
-        long start = System.currentTimeMillis();
+        long start = System.nanoTime();
         for (int i = 0; i < toWrite; i++) {
             Document document = new Document();
             document.add(new Field("fieldName", wordsFromString(random), fieldType));
@@ -415,7 +444,7 @@ public class Main {
         Directory directory = getCleanDirectory("test-directory");
         IndexWriterConfig conf = getBaseIndexWriterConfig().setMergePolicy(NoMergePolicy.NO_COMPOUND_FILES);
         IndexWriter indexWriter = new IndexWriter(directory, conf);
-        long start = System.currentTimeMillis();
+        long start = System.nanoTime();
         int commits = 0;
         for (int i = 0; i < toWrite; i++) {
             Document document = new Document();
@@ -425,8 +454,8 @@ public class Main {
         }
         indexWriter.close();
         SizeAndTime sizeAndTime = getSizeAndTime(directory, start);
-        double millisPerCommit = (sizeAndTime.millis) / (double) (commits);
-        double commitsPerSecond = (double) (commits) / ((sizeAndTime.millis / 1000.0));
+        double millisPerCommit = (sizeAndTime.nanos) / (double) (commits);
+        double commitsPerSecond = (double) (commits) / ((sizeAndTime.nanos / 1000.0));
         System.out.println("  got " + sizeAndTime + " and " + commits + " commits = " + millisPerCommit + " ms/commit = " + commitsPerSecond + " commits/sec");
     }
 
@@ -461,8 +490,8 @@ public class Main {
         }
         indexWriter.close();
         SizeAndTime sizeAndTime = getSizeAndTime(directory, start);
-        double millisPerCommit = (sizeAndTime.millis) / (double) (commits);
-        double commitsPerSecond = (double) (commits) / ((sizeAndTime.millis / 1000.0));
+        double millisPerCommit = (sizeAndTime.nanos) / (double) (commits);
+        double commitsPerSecond = (double) (commits) / ((sizeAndTime.nanos / 1000.0));
         System.out.println("  got " + sizeAndTime + " and " + commits + " commits = " + millisPerCommit + " ms/commit = " + commitsPerSecond + " commits/sec");
     }
 
@@ -474,7 +503,7 @@ public class Main {
         for (int commitEvery = toWrite; commitEvery >= 1; commitEvery /= 10) {
             Directory directory = getCleanDirectory("test-directory");
             IndexWriter indexWriter = getIndexWriter(directory);
-            long start = System.currentTimeMillis();
+            long start = System.nanoTime();
             int commits = 0;
             for (int i = 0; i < toWrite; i++) {
                 Document document = new Document();
@@ -486,8 +515,8 @@ public class Main {
             }
             indexWriter.close();
             SizeAndTime sizeAndTime = getSizeAndTime(directory, start);
-            double millisPerCommit = (sizeAndTime.millis) / (double) (commits);
-            double commitsPerSecond = (double) (commits) / ((sizeAndTime.millis / 1000.0));
+            double millisPerCommit = (sizeAndTime.nanos) / (double) (commits);
+            double commitsPerSecond = (double) (commits) / ((sizeAndTime.nanos / 1000.0));
             System.out.println("  committing every " + commitEvery + " results in " + sizeAndTime + " and " + commits + " commits = " + millisPerCommit + " ms/commit = " + commitsPerSecond + " commits/sec");
         }
     }
@@ -500,8 +529,8 @@ public class Main {
         for (int n = 10; n < 1_000_000_000; n *= 10) {
             SizeAndTime sizeAndTime = writeEmptyDocuments(directorySupplier, n, adjustConfig);
             double bytesPerDocument = (sizeAndTime.bytes - singleEmptyDocument.bytes) / (n - 1.0);
-            double millisPerDocument = (sizeAndTime.millis - singleEmptyDocument.millis) / (n - 1.0);
-            double documentPerMs = (n - 1.0) / (sizeAndTime.millis - singleEmptyDocument.millis);
+            double millisPerDocument = (sizeAndTime.nanos - singleEmptyDocument.nanos) / (n - 1.0);
+            double documentPerMs = (n - 1.0) / (sizeAndTime.nanos - singleEmptyDocument.nanos);
             System.out.println("  index with " + n + " empty document: " + sizeAndTime + " = " + String.format(Locale.ENGLISH, "%.5f", bytesPerDocument) + " bytes per document and " + millisPerDocument + " ms/document = " + documentPerMs + " documents/ms");
         }
     }
@@ -513,7 +542,7 @@ public class Main {
     private static SizeAndTime writeEmptyDocuments(Supplier<Directory> supplier, int n, Function<IndexWriterConfig, IndexWriterConfig> adjustConfig) throws IOException {
         Directory directory = supplier.get();
         IndexWriter indexWriter = getIndexWriter(directory, adjustConfig);
-        long start = System.currentTimeMillis();
+        long start = System.nanoTime();
         for (int i = 0; i < n; i++) {
             Document document = new Document();
             indexWriter.addDocument(document);
@@ -527,7 +556,7 @@ public class Main {
     }
 
     private static SizeAndTime getSizeAndTime(Directory directory, long start) throws IOException {
-        return new SizeAndTime(getDirectorySize(directory), System.currentTimeMillis() - start);
+        return new SizeAndTime(getDirectorySize(directory), System.nanoTime() - start);
     }
 
     private static long getDirectorySize(Directory directory) throws IOException {
@@ -597,23 +626,25 @@ public class Main {
 
     private static class SizeAndTime {
         long bytes;
+        long nanos;
+        double secs;
         long millis;
 
-        private SizeAndTime(long bytes, long millis) {
+        private SizeAndTime(long bytes, long nanos) {
             this.bytes = bytes;
-            this.millis = millis;
+            this.nanos = nanos;
+            this.millis = nanos / 1_000_000;
+            secs = nanos / 1_000_000_000.0;
         }
 
         @Override
         public String toString() {
-            return bytes +
-                    " bytes in " + (millis / 1000.0) +
-                    " sec";
+            return bytes + " bytes in " + secs + " sec";
         }
 
         public String relativeToNumberOfDocuments(int numDocuments) {
             float bytesPerDocument = bytes / (float) numDocuments;
-            float msPerDocument = millis / (float) numDocuments;
+            float msPerDocument = nanos / (float) numDocuments;
             return String.format(Locale.ENGLISH, "%d bytes/document and %.1f ms/1000 documents", (int) bytesPerDocument, msPerDocument * 1000);
         }
     }
@@ -660,7 +691,7 @@ public class Main {
         @Override
         public String toString() {
             return "{" +
-                    "documents=" + numberOfDocuments +
+                    "docs=" + numberOfDocuments +
                     ", distinctWords=" + numberOfDistinctWords +
                     ", wordSize=" + wordSize +
                     ", wordsPerDocument=" + numberOfWordsPerDocument +
