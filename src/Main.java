@@ -1,10 +1,7 @@
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.core.KeywordAnalyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
-import org.apache.lucene.document.Document;
-import org.apache.lucene.document.Field;
-import org.apache.lucene.document.FieldType;
-import org.apache.lucene.document.TextField;
+import org.apache.lucene.document.*;
 import org.apache.lucene.index.*;
 import org.apache.lucene.search.*;
 import org.apache.lucene.store.Directory;
@@ -15,6 +12,8 @@ import org.apache.lucene.util.Version;
 
 import java.io.File;
 import java.io.IOException;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -52,7 +51,45 @@ public class Main {
 //        speedOfAnalyzer(new KeywordAnalyzer(), Main::wordsFromString);
 //        speedOfAnalyzer(new StandardAnalyzer(Version.LUCENE_50), Main::randomWords);
 //        speedOfAnalyzer(new KeywordAnalyzer(), Main::randomWords);
-        speedOfAnalyzerDifferentWays();
+//        speedOfAnalyzerDifferentWays();
+        filterAndQuery();
+    }
+
+    private static void filterAndQuery() throws IOException, ParseException {
+        Directory directory = getMemoryDirectory();
+
+        IndexWriter indexWriter = getIndexWriter(directory);
+        addSale(indexWriter, parse("2000-01-02 03:04:00"), "de", "shirt", 123.45);
+        addSale(indexWriter, parse("2000-01-02 03:05:00"), "en", "shirt", 42.00);
+        addSale(indexWriter, parse("2000-01-02 03:06:00"), "de", "shirt", 9.99);
+        indexWriter.close();
+
+        IndexReader reader = DirectoryReader.open(directory);
+        IndexSearcher searcher = new IndexSearcher(reader);
+        Query query = new MatchAllDocsQuery();
+        Filter timeFilter = new TermRangeFilter("date", asBytes("2000-01-02 03:04:01"), asBytes("2000-01-02 03:05:10"), true, true);
+        FieldStatsCollector collector = new FieldStatsCollector();
+        searcher.search(query, timeFilter, collector);
+        System.out.println("Sold " + collector.sales + " products for a total of " + collector.sum);
+        reader.close();
+
+    }
+
+    private static BytesRef asBytes(String date) throws ParseException {
+        return new BytesRef(DateTools.dateToString(parse(date), DateTools.Resolution.SECOND));
+    }
+
+    private static void addSale(IndexWriter indexWriter, Date date, String country, String what, double price) throws IOException {
+        Document document = new Document();
+        document.add(new Field("date", DateTools.dateToString(date, DateTools.Resolution.SECOND), TextField.TYPE_STORED));
+        document.add(new Field("country", country, TextField.TYPE_STORED));
+        document.add(new Field("product", what, TextField.TYPE_STORED));
+        document.add(new DoubleField("price", price, DoubleField.TYPE_STORED));
+        indexWriter.addDocument(document);
+    }
+
+    private static Date parse(String s) throws ParseException {
+        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(s);
     }
 
     private static void speedOfAnalyzerDifferentWays() throws IOException {
@@ -698,6 +735,35 @@ public class Main {
                     ", fieldSize=" + (numberOfWordsPerDocument * (wordSize + 1)) +
                     ", analyser=" + analyser.getClass().getSimpleName() +
                     '}';
+        }
+    }
+
+    private static class FieldStatsCollector extends Collector {
+        private AtomicReaderContext context;
+        private int sales;
+        private double sum;
+
+        @Override
+        public void setScorer(Scorer scorer) throws IOException {
+
+        }
+
+        @Override
+        public void collect(int doc) throws IOException {
+            StoredDocument document = context.reader().document(doc);
+            StorableField price1 = document.getField("price");
+            double v = price1.numericValue().doubleValue();
+            sales++;
+            sum += v;
+        }
+
+        public void setNextReader(AtomicReaderContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public boolean acceptsDocsOutOfOrder() {
+            return true;
         }
     }
 }
