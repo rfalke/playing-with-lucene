@@ -52,7 +52,39 @@ public class Main {
 //        speedOfAnalyzer(new StandardAnalyzer(Version.LUCENE_50), Main::randomWords);
 //        speedOfAnalyzer(new KeywordAnalyzer(), Main::randomWords);
 //        speedOfAnalyzerDifferentWays();
-        filterAndQuery();
+//        filterAndQuery();
+        queryWithBuckets();
+    }
+
+    private static void queryWithBuckets() throws IOException, ParseException {
+        Directory directory = getMemoryDirectory();
+
+        IndexWriter indexWriter = getIndexWriter(directory);
+        addSale(indexWriter, parse("2000-01-02 03:04:00"), "de", "shirt", 123.45);
+        addSale(indexWriter, parse("2000-01-02 03:05:00"), "en", "shirt", 42.00);
+        addSale(indexWriter, parse("2000-01-02 03:06:00"), "de", "shirt", 9.99);
+        addSale(indexWriter, parse("2000-01-02 03:06:00"), "uk", "pants", 14.49);
+        indexWriter.close();
+
+        IndexReader reader = DirectoryReader.open(directory);
+        IndexSearcher searcher = new IndexSearcher(reader);
+        Query query = new MatchAllDocsQuery();
+        Filter timeFilter = new TermRangeFilter("date", asBytes("2000-01-02 03:03:01"), asBytes("2000-01-02 03:06:10"), true, true);
+        runBucketCollector(searcher, query, timeFilter, "country", "product");
+        runBucketCollector(searcher, query, timeFilter, "country");
+        runBucketCollector(searcher, query, timeFilter, "product");
+        runBucketCollector(searcher, query, timeFilter);
+        reader.close();
+    }
+
+    private static void runBucketCollector(IndexSearcher searcher, Query query, Filter timeFilter, String... fields) throws IOException {
+        BucketCollector collector = new BucketCollector(fields);
+        searcher.search(query, timeFilter, collector);
+        System.out.println("Results for " + Arrays.toString(fields));
+        for (Map.Entry<BucketCollector.BucketKey, BucketCollector.Bucket> entry : collector.buckets.entrySet()) {
+            BucketCollector.Bucket bucket = entry.getValue();
+            System.out.println("  for " + entry.getKey().values + " sold " + bucket.sales + " products for a total of " + bucket.sum);
+        }
     }
 
     private static void filterAndQuery() throws IOException, ParseException {
@@ -764,6 +796,84 @@ public class Main {
         @Override
         public boolean acceptsDocsOutOfOrder() {
             return true;
+        }
+    }
+
+    private static class BucketCollector extends Collector {
+        private final String[] fields;
+        private AtomicReaderContext context;
+        private Map<BucketKey, Bucket> buckets = new HashMap<>();
+
+        public BucketCollector(String... fields) {
+            this.fields = fields;
+        }
+
+        @Override
+        public void setScorer(Scorer scorer) throws IOException {
+
+        }
+
+        @Override
+        public void collect(int doc) throws IOException {
+            StoredDocument document = context.reader().document(doc);
+            BucketKey key = getKey(document);
+            if (!buckets.containsKey(key)) {
+                buckets.put(key, new Bucket());
+            }
+            buckets.get(key).add(document);
+        }
+
+        private BucketKey getKey(StoredDocument document) {
+            Map<String, String> values = new HashMap<>();
+            for (String field : fields) {
+                values.put(field, document.get(field));
+            }
+            return new BucketKey(values);
+        }
+
+        public void setNextReader(AtomicReaderContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public boolean acceptsDocsOutOfOrder() {
+            return true;
+        }
+
+        private class BucketKey {
+
+            private final Map<String, String> values;
+
+            public BucketKey(Map<String, String> values) {
+                this.values = values;
+            }
+
+            @Override
+            public boolean equals(Object o) {
+                if (this == o) return true;
+                if (o == null || getClass() != o.getClass()) return false;
+
+                BucketKey bucketKey = (BucketKey) o;
+
+                return values.equals(bucketKey.values);
+            }
+
+            @Override
+            public int hashCode() {
+                return values.hashCode();
+            }
+        }
+
+        private class Bucket {
+            int sales;
+            double sum;
+
+            public void add(StoredDocument document) {
+                StorableField priceField = document.getField("price");
+                double price = priceField.numericValue().doubleValue();
+                sales++;
+                sum += price;
+            }
         }
     }
 }
